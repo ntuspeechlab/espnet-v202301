@@ -37,7 +37,7 @@ from espnet.nets.scorer_interface import BatchScorerInterface
 from espnet.nets.scorers.ctc import CTCPrefixScorer
 from espnet.nets.scorers.length_bonus import LengthBonus
 from espnet.utils.cli_utils import get_commandline_args
-
+import ipdb
 try:
     from transformers import AutoModelForSeq2SeqLM
     from transformers.file_utils import ModelOutput
@@ -369,15 +369,20 @@ class Speech2Text:
             speech = torch.tensor(speech)
 
         # data: (Nsamples,) -> (1, Nsamples)
-        speech = speech.unsqueeze(0).to(getattr(torch, self.dtype))
+        # speech = speech.unsqueeze(0).to(getattr(torch, self.dtype))
+        speech = speech.to(getattr(torch, self.dtype))
         # lengths: (1,)
-        lengths = speech.new_full([1], dtype=torch.long, fill_value=speech.size(1))
+        # lengths = speech.new_full([1], dtype=torch.long, fill_value=speech.size(1))
+        lengths = speech.new_full([speech.shape[0]], dtype=torch.long, fill_value=speech.size(1))
+        # speech = speech.transpose(0, 1)
         batch = {"speech": speech, "speech_lengths": lengths}
+        
         logging.info("speech length: " + str(speech.size(1)))
-
+        # logging.info("speech length: " + str(speech.size(-1)))
+        
         # a. To device
         batch = to_device(batch, device=self.device)
-
+        # ipdb.set_trace()
         # b. Forward Encoder
         enc, _ = self.asr_model.encode(**batch)
         if self.multi_asr:
@@ -406,11 +411,18 @@ class Speech2Text:
             # Normal ASR
             if isinstance(enc, tuple):
                 enc = enc[0]
-            assert len(enc) == 1, len(enc)
-
-            # c. Passed the encoder result and the beam search
-            results = self._decode_single_sample(enc[0])
-            assert check_return_type(results)
+            if len(enc) > 1:
+                encs = enc
+                results = list()
+                for enc in encs:
+                    result = self._decode_single_sample(enc)
+                    assert check_return_type(result)
+                    results.append(result)
+            else:
+                assert len(enc) == 1, len(enc)
+                # c. Passed the encoder result and the beam search
+                results = self._decode_single_sample(enc[0])
+                assert check_return_type(results)
 
         return results
 
@@ -630,12 +642,13 @@ def inference(
     # FIXME(kamo): The output format should be discussed about
     with DatadirWriter(output_dir) as writer:
         for keys, batch in loader:
+            # ipdb.set_trace()
             assert isinstance(batch, dict), type(batch)
             assert all(isinstance(s, str) for s in keys), keys
             _bs = len(next(iter(batch.values())))
             assert len(keys) == _bs, f"{len(keys)} != {_bs}"
-            batch = {k: v[0] for k, v in batch.items() if not k.endswith("_lengths")}
-
+            # batch = {k: v[0] for k, v in batch.items() if not k.endswith("_lengths")}
+            batch = {k: v for k, v in batch.items() if not k.endswith("_lengths")}
             # N-best list of (text, token, token_int, hyp_object)
             try:
                 results = speech2text(**batch)
@@ -670,19 +683,32 @@ def inference(
 
             else:
                 # Normal ASR
-                for n, (text, token, token_int, hyp) in zip(
-                    range(1, nbest + 1), results
-                ):
-                    # Create a directory: outdir/{n}best_recog
-                    ibest_writer = writer[f"{n}best_recog"]
+                if len(keys) > 1:
+                    assert len(keys) == len(results)
+                    for index, key in enumerate(keys):
+                        for n, (text, token, token_int, hyp) in zip(
+                                range(1, nbest + 1), results[index]
+                        ):
+                            ibest_writer = writer[f"{n}best_recog"]
+                            ibest_writer["token"][key] = " ".join(token)
+                            ibest_writer["token_int"][key] = " ".join(map(str, token_int))
+                            ibest_writer["score"][key] = str(hyp.score)
+                            if text is not None:
+                                ibest_writer["text"][key] = text
+                else:
+                    for n, (text, token, token_int, hyp) in zip(
+                            range(1, nbest + 1), results
+                    ):
+                        # Create a directory: outdir/{n}best_recog
+                        ibest_writer = writer[f"{n}best_recog"]
 
-                    # Write the result to each file
-                    ibest_writer["token"][key] = " ".join(token)
-                    ibest_writer["token_int"][key] = " ".join(map(str, token_int))
-                    ibest_writer["score"][key] = str(hyp.score)
+                        # Write the result to each file
+                        ibest_writer["token"][key] = " ".join(token)
+                        ibest_writer["token_int"][key] = " ".join(map(str, token_int))
+                        ibest_writer["score"][key] = str(hyp.score)
 
-                    if text is not None:
-                        ibest_writer["text"][key] = text
+                        if text is not None:
+                            ibest_writer["text"][key] = text
 
 
 def get_parser():

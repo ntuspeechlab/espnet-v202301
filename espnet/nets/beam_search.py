@@ -362,6 +362,8 @@ class BeamSearch(torch.nn.Module):
 
         """
         # set length bounds
+        # import ipdb
+        # ipdb.set_trace()
         if maxlenratio == 0:
             maxlen = x.shape[0]
         elif maxlenratio < 0:
