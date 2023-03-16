@@ -574,6 +574,18 @@ class ESPnetASRModel(AbsESPnetModel):
             cer_ctc = self.error_calculator(ys_hat.cpu(), ys_pad.cpu(), is_ctc=True)
         return loss_ctc, cer_ctc
 
+    def _calc_mwer_loss_ctc(
+        self,
+        beam_size: int,
+        encoder_out: torch.Tensor,
+        encoder_out_lens: torch.Tensor,
+        ys_pad: torch.Tensor,
+        ys_pad_lens: torch.Tensor,
+    ):
+        loss_mwer_ctc = None
+
+        return loss_mwer_ctc
+
     def _calc_transducer_loss(
         self,
         encoder_out: torch.Tensor,

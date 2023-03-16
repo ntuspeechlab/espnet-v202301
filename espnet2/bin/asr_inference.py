@@ -267,7 +267,7 @@ class Speech2Text:
                 )
 
                 # TODO(karita): make all scorers batchfied
-                if batch_size == 1:
+                if batch_size >= 1:
                     non_batch = [
                         k
                         for k, v in beam_search.full_scorers.items()
@@ -557,8 +557,8 @@ def inference(
     multi_asr: bool,
 ):
     assert check_argument_types()
-    if batch_size > 1:
-        raise NotImplementedError("batch decoding is not implemented")
+    # if batch_size > 1:
+    #     raise NotImplementedError("batch decoding is not implemented")
     if word_lm_train_config is not None:
         raise NotImplementedError("Word LM is not implemented")
     if ngpu > 1:
