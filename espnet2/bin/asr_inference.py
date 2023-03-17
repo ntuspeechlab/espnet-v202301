@@ -37,8 +37,7 @@ from espnet.nets.scorer_interface import BatchScorerInterface
 from espnet.nets.scorers.ctc import CTCPrefixScorer
 from espnet.nets.scorers.length_bonus import LengthBonus
 from espnet.utils.cli_utils import get_commandline_args
-import multiprocessing
-from torch.utils.data import DataLoader
+from torch.multiprocessing import Pool, set_start_method
 
 try:
     from transformers import AutoModelForSeq2SeqLM
@@ -628,7 +627,11 @@ def inference(
         allow_variable_data_keys=allow_variable_data_keys,
         inference=True,
     )
-    pool = multiprocessing.Pool(processes=num_threads)
+    try:
+        set_start_method("spawn")
+    except RuntimeError:
+        logging.error("Multithreads is with errors")
+    pool = Pool(processes=num_threads)
     # 7 .Start for-loop
     # FIXME(kamo): The output format should be discussed about
     with DatadirWriter(output_dir) as writer:
