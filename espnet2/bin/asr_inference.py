@@ -37,6 +37,8 @@ from espnet.nets.scorer_interface import BatchScorerInterface
 from espnet.nets.scorers.ctc import CTCPrefixScorer
 from espnet.nets.scorers.length_bonus import LengthBonus
 from espnet.utils.cli_utils import get_commandline_args
+import multiprocessing
+from torch.utils.data import DataLoader
 
 try:
     from transformers import AutoModelForSeq2SeqLM
@@ -529,6 +531,7 @@ def inference(
     ngram_weight: float,
     penalty: float,
     nbest: int,
+    num_threads: int,
     num_workers: int,
     log_level: Union[int, str],
     data_path_and_name_and_type: Sequence[Tuple[str, str, str]],
@@ -629,60 +632,100 @@ def inference(
     # 7 .Start for-loop
     # FIXME(kamo): The output format should be discussed about
     with DatadirWriter(output_dir) as writer:
-        for keys, batch in loader:
-            assert isinstance(batch, dict), type(batch)
-            assert all(isinstance(s, str) for s in keys), keys
-            _bs = len(next(iter(batch.values())))
-            assert len(keys) == _bs, f"{len(keys)} != {_bs}"
-            batch = {k: v[0] for k, v in batch.items() if not k.endswith("_lengths")}
+        parallel_decode(
+            loader=loader, speech2text=speech2text, nbest=nbest, writer=writer
+        )
+        # for keys, batch in loader:
+        #     assert isinstance(batch, dict), type(batch)
+        #     assert all(isinstance(s, str) for s in keys), keys
+        #     _bs = len(next(iter(batch.values())))
+        #     assert len(keys) == _bs, f"{len(keys)} != {_bs}"
+        #     batch = {k: v[0] for k, v in batch.items() if not k.endswith("_lengths")}
 
-            # N-best list of (text, token, token_int, hyp_object)
-            try:
-                results = speech2text(**batch)
-            except TooShortUttError as e:
-                logging.warning(f"Utterance {keys} {e}")
-                hyp = Hypothesis(score=0.0, scores={}, states={}, yseq=[])
-                results = [[" ", ["<space>"], [2], hyp]] * nbest
-                if enh_s2t_task:
-                    num_spk = getattr(speech2text.asr_model.enh_model, "num_spk", 1)
-                    results = [results for _ in range(num_spk)]
+        #     # N-best list of (text, token, token_int, hyp_object)
+        #     try:
+        #         results = speech2text(**batch)
+        #     except TooShortUttError as e:
+        #         logging.warning(f"Utterance {keys} {e}")
+        #         hyp = Hypothesis(score=0.0, scores={}, states={}, yseq=[])
+        #         results = [[" ", ["<space>"], [2], hyp]] * nbest
+        #         if enh_s2t_task:
+        #             num_spk = getattr(speech2text.asr_model.enh_model, "num_spk", 1)
+        #             results = [results for _ in range(num_spk)]
 
-            # Only supporting batch_size==1
-            key = keys[0]
-            if enh_s2t_task or multi_asr:
-                # Enh+ASR joint task
-                for spk, ret in enumerate(results, 1):
-                    for n, (text, token, token_int, hyp) in zip(
-                        range(1, nbest + 1), ret
-                    ):
-                        # Create a directory: outdir/{n}best_recog_spk?
-                        ibest_writer = writer[f"{n}best_recog"]
+        #     # Only supporting batch_size==1
+        #     key = keys[0]
+        #     if enh_s2t_task or multi_asr:
+        #         # Enh+ASR joint task
+        #         for spk, ret in enumerate(results, 1):
+        #             for n, (text, token, token_int, hyp) in zip(
+        #                 range(1, nbest + 1), ret
+        #             ):
+        #                 # Create a directory: outdir/{n}best_recog_spk?
+        #                 ibest_writer = writer[f"{n}best_recog"]
 
-                        # Write the result to each file
-                        ibest_writer[f"token_spk{spk}"][key] = " ".join(token)
-                        ibest_writer[f"token_int_spk{spk}"][key] = " ".join(
-                            map(str, token_int)
-                        )
-                        ibest_writer[f"score_spk{spk}"][key] = str(hyp.score)
+        #                 # Write the result to each file
+        #                 ibest_writer[f"token_spk{spk}"][key] = " ".join(token)
+        #                 ibest_writer[f"token_int_spk{spk}"][key] = " ".join(
+        #                     map(str, token_int)
+        #                 )
+        #                 ibest_writer[f"score_spk{spk}"][key] = str(hyp.score)
 
-                        if text is not None:
-                            ibest_writer[f"text_spk{spk}"][key] = text
+        #                 if text is not None:
+        #                     ibest_writer[f"text_spk{spk}"][key] = text
 
-            else:
-                # Normal ASR
-                for n, (text, token, token_int, hyp) in zip(
-                    range(1, nbest + 1), results
-                ):
-                    # Create a directory: outdir/{n}best_recog
-                    ibest_writer = writer[f"{n}best_recog"]
+        #     else:
+        #         # Normal ASR
+        #         for n, (text, token, token_int, hyp) in zip(
+        #             range(1, nbest + 1), results
+        #         ):
+        #             # Create a directory: outdir/{n}best_recog
+        #             ibest_writer = writer[f"{n}best_recog"]
 
-                    # Write the result to each file
-                    ibest_writer["token"][key] = " ".join(token)
-                    ibest_writer["token_int"][key] = " ".join(map(str, token_int))
-                    ibest_writer["score"][key] = str(hyp.score)
+        #             # Write the result to each file
+        #             ibest_writer["token"][key] = " ".join(token)
+        #             ibest_writer["token_int"][key] = " ".join(map(str, token_int))
+        #             ibest_writer["score"][key] = str(hyp.score)
 
-                    if text is not None:
-                        ibest_writer["text"][key] = text
+        #             if text is not None:
+        #                 ibest_writer["text"][key] = text
+
+
+def parallel_decode(
+    loader: DataLoader,
+    speech2text: Speech2Text,
+    nbest: int,
+    writer: DatadirWriter,
+) -> None:
+    for keys, batch in loader:
+        assert isinstance(batch, dict), type(batch)
+        assert all(isinstance(s, str) for s in keys), keys
+        _bs = len(next(iter(batch.values())))
+        assert len(keys) == _bs, f"{len(keys)} != {_bs}"
+        batch = {k: v[0] for k, v in batch.items() if not k.endswith("_lengths")}
+
+        # N-best list of (text, token, token_int, hyp_object)
+        try:
+            results = speech2text(**batch)
+        except TooShortUttError as e:
+            logging.warning(f"Utterance {keys} {e}")
+            hyp = Hypothesis(score=0.0, scores={}, states={}, yseq=[])
+            results = [[" ", ["<space>"], [2], hyp]] * nbest
+
+        # Only supporting batch_size==1
+        key = keys[0]
+        # Normal ASR
+        for n, (text, token, token_int, hyp) in zip(range(1, nbest + 1), results):
+            # Create a directory: outdir/{n}best_recog
+            ibest_writer = writer[f"{n}best_recog"]
+
+            # Write the result to each file
+            ibest_writer["token"][key] = " ".join(token)
+            ibest_writer["token_int"][key] = " ".join(map(str, token_int))
+            ibest_writer["score"][key] = str(hyp.score)
+
+            if text is not None:
+                ibest_writer["text"][key] = text
 
 
 def get_parser():
@@ -721,7 +764,12 @@ def get_parser():
         default=1,
         help="The number of workers used for DataLoader",
     )
-
+    parser.add_argument(
+        "--num_threads",
+        type=int,
+        default=1,
+        help="The number of threads used for Parallel Decoding",
+    )
     group = parser.add_argument_group("Input data related")
     group.add_argument(
         "--data_path_and_name_and_type",
