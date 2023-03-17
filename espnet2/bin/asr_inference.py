@@ -638,9 +638,12 @@ def inference(
     # with DatadirWriter(output_dir) as writer:
     parallel_list = list()
     for n, (keys, batch) in enumerate(loader):
+        # for keys, batch in loader:
+        #     pool.apply_async(parallel_decode, (keys, batch, speech2text, nbest, writer))
         parallel_list.append([keys, batch, speech2text, nbest, output_dir + "." + str(n)])
     logging.info("Start decoding, number of utterances: {}".format(len(parallel_list)))
     pool.map(parallel_decode, parallel_list)
+    # pool.apply_async(parallel_decode, parallel_list[0])
         # parallel_decode(
         #     loader=loader, speech2text=speech2text, nbest=nbest, writer=writer
         # )
@@ -701,13 +704,12 @@ def inference(
 
 
 def parallel_decode(
-    args,
+    args
 ) -> None:
     keys = args[0]
     batch = args[1]
     speech2text = args[2]
     nbest = args[3]
-    # writer = args[4]
     output_dir = args[4]
     assert isinstance(batch, dict), type(batch)
     assert all(isinstance(s, str) for s in keys), keys
