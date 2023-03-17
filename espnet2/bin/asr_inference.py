@@ -634,9 +634,13 @@ def inference(
     pool = Pool(processes=num_threads)
     # 7 .Start for-loop
     # FIXME(kamo): The output format should be discussed about
-    with DatadirWriter(output_dir) as writer:
-        for keys, batch in loader:
-            pool.apply_async(parallel_decode, (keys, batch, speech2text, nbest, writer))
+    logging.info(output_dir)
+    # with DatadirWriter(output_dir) as writer:
+    parallel_list = list()
+    for n, (keys, batch) in enumerate(loader):
+        parallel_list.append([keys, batch, speech2text, nbest, output_dir + "." + str(n)])
+    logging.info("Start decoding, number of utterances: {}".format(len(parallel_list)))
+    pool.map(parallel_decode, parallel_list)
         # parallel_decode(
         #     loader=loader, speech2text=speech2text, nbest=nbest, writer=writer
         # )
@@ -697,18 +701,20 @@ def inference(
 
 
 def parallel_decode(
-    keys,
-    batch,
-    speech2text: Speech2Text,
-    nbest: int,
-    writer: DatadirWriter,
+    args,
 ) -> None:
+    keys = args[0]
+    batch = args[1]
+    speech2text = args[2]
+    nbest = args[3]
+    # writer = args[4]
+    output_dir = args[4]
     assert isinstance(batch, dict), type(batch)
     assert all(isinstance(s, str) for s in keys), keys
     _bs = len(next(iter(batch.values())))
     assert len(keys) == _bs, f"{len(keys)} != {_bs}"
     batch = {k: v[0] for k, v in batch.items() if not k.endswith("_lengths")}
-
+    
     # N-best list of (text, token, token_int, hyp_object)
     try:
         results = speech2text(**batch)
@@ -720,17 +726,18 @@ def parallel_decode(
     # Only supporting batch_size==1
     key = keys[0]
     # Normal ASR
-    for n, (text, token, token_int, hyp) in zip(range(1, nbest + 1), results):
-        # Create a directory: outdir/{n}best_recog
-        ibest_writer = writer[f"{n}best_recog"]
+    with DatadirWriter(output_dir) as writer:
+        for n, (text, token, token_int, hyp) in zip(range(1, nbest + 1), results):
+            # Create a directory: outdir/{n}best_recog
+            ibest_writer = writer[f"{n}best_recog"]
+            logging.warning(text)
+            # Write the result to each file
+            ibest_writer["token"][key] = " ".join(token)
+            ibest_writer["token_int"][key] = " ".join(map(str, token_int))
+            ibest_writer["score"][key] = str(hyp.score)
 
-        # Write the result to each file
-        ibest_writer["token"][key] = " ".join(token)
-        ibest_writer["token_int"][key] = " ".join(map(str, token_int))
-        ibest_writer["score"][key] = str(hyp.score)
-
-        if text is not None:
-            ibest_writer["text"][key] = text
+            if text is not None:
+                ibest_writer["text"][key] = text
 
 
 def get_parser():
